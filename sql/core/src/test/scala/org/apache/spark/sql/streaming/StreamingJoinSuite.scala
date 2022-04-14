@@ -32,7 +32,7 @@ import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.plans.physical.HashPartitioning
 import org.apache.spark.sql.execution.exchange.ShuffleExchangeExec
-import org.apache.spark.sql.execution.streaming.{MemoryStream, StatefulOperatorStateInfo, StreamingSymmetricHashJoinExec, StreamingSymmetricHashJoinHelper}
+import org.apache.spark.sql.execution.streaming._
 import org.apache.spark.sql.execution.streaming.state.{RocksDBStateStoreProvider, StateStore, StateStoreProviderId}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
@@ -1043,6 +1043,31 @@ class StreamingOuterJoinSuite extends StreamingJoinSuite {
         Row(1, 1L, null, null), Row(3, 3L, null, null)),
       assertNumStateRows(15, 7)
     )
+  }
+
+  test("SPARK-38906 do not drop watermark when joinWith() is called") {
+    def left = MemoryStream[(Int, Long)]
+    def right = MemoryStream[(Int, Long)]
+
+    def toStream(input: MemoryStreamBase[(Int, Long)], prefix: String) = input
+      .toDS()
+      .select($"_1".alias(s"${prefix}Value"), timestamp_seconds($"_2").alias(s"${prefix}Time"))
+      .withWatermark(s"${prefix}Time", "6 seconds")
+
+    val query = toStream(left, "left").joinWith(
+      toStream(right, "right"),
+      ($"leftValue" === $"rightValue")
+        && $"rightTime".between($"leftTime", expr("leftTime + interval 5 seconds")),
+      joinType = "leftOuter",
+      )
+    testStream(query)(
+      MultiAddData(left, (1, 1L), (2, 3L))(right, (1, 2L)),
+      CheckNewAnswer( (1->1L, 1->2L) ),
+      assertNumStateRows(3, 3),
+      AddData(left, (4, 10L)), // force watermark expire
+      CheckNewAnswer( (1->1L, 1->2L), (2->3L, null) ),
+      assertNumStateRows(3, 3)
+      )
   }
 
   test("SPARK-26187 self right outer join should not return outer nulls for already matched rows") {
