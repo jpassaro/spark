@@ -42,11 +42,19 @@ object StreamingJoinHelper extends PredicateHelper with Logging {
   def isWatermarkInJoinKeys(plan: LogicalPlan): Boolean = {
     plan match {
       case ExtractEquiJoinKeys(_, leftKeys, rightKeys, _, _, _, _, _) =>
+        println("extractEquiJoinKeys")
         (leftKeys ++ rightKeys).exists {
-          case a: AttributeReference => a.metadata.contains(EventTimeWatermark.delayKey)
-          case _ => false
+          case a: AttributeReference =>
+            val hasWmark = a.metadata.contains(EventTimeWatermark.delayKey)
+            println(s"key = $a haswatermark=${hasWmark}")
+            hasWmark
+          case x =>
+            println(s"key $x: ${x.getClass.getName} is not an AttributeReference")
+            false
         }
-      case _ => false
+      case x =>
+        println(s"no watermark: ${x.getClass.getName}")
+        false
     }
   }
 
@@ -74,10 +82,20 @@ object StreamingJoinHelper extends PredicateHelper with Logging {
       eventWatermark: Option[Long]): Option[Long] = {
 
     // If condition or event time watermark is not provided, then cannot calculate state watermark
-    if (joinCondition.isEmpty || eventWatermark.isEmpty) return None
+    if (joinCondition.isEmpty || eventWatermark.isEmpty) {
+      println(s"joinCondition=$joinCondition, eventWatermark=$eventWatermark")
+      return None
+    }
 
     // If there is not watermark attribute, then cannot define state watermark
-    if (!attributesWithEventWatermark.exists(_.metadata.contains(delayKey))) return None
+    if (!attributesWithEventWatermark.exists { x =>
+        val hasWmark = x.metadata.contains(delayKey)
+        println(s"key $x: ${x.getClass.getName} haswatermark=$hasWmark")
+        hasWmark
+      }) {
+        println("unable to find watermark on nullable side")
+      return None
+    }
 
     def getStateWatermarkSafely(l: Expression, r: Expression): Option[Long] = {
       try {

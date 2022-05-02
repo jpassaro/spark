@@ -1045,31 +1045,6 @@ class StreamingOuterJoinSuite extends StreamingJoinSuite {
     )
   }
 
-  test("SPARK-38906 do not drop watermark when joinWith() is called") {
-    def left = MemoryStream[(Int, Long)]
-    def right = MemoryStream[(Int, Long)]
-
-    def toStream(input: MemoryStreamBase[(Int, Long)], prefix: String) = input
-      .toDS()
-      .select($"_1".alias(s"${prefix}Value"), timestamp_seconds($"_2").alias(s"${prefix}Time"))
-      .withWatermark(s"${prefix}Time", "6 seconds")
-
-    val query = toStream(left, "left").joinWith(
-      toStream(right, "right"),
-      ($"leftValue" === $"rightValue")
-        && $"rightTime".between($"leftTime", expr("leftTime + interval 5 seconds")),
-      joinType = "leftOuter",
-      )
-    testStream(query)(
-      MultiAddData(left, (1, 1L), (2, 3L))(right, (1, 2L)),
-      CheckNewAnswer( (1->1L, 1->2L) ),
-      assertNumStateRows(3, 3),
-      AddData(left, (4, 10L)), // force watermark expire
-      CheckNewAnswer( (1->1L, 1->2L), (2->3L, null) ),
-      assertNumStateRows(3, 3)
-      )
-  }
-
   test("SPARK-26187 self right outer join should not return outer nulls for already matched rows") {
     val inputStream = MemoryStream[(Int, Long)]
 
@@ -1168,6 +1143,57 @@ class StreamingOuterJoinSuite extends StreamingJoinSuite {
     assert(e.getMessage.toLowerCase(Locale.ROOT)
       .contains("the query is using stream-stream leftouter join with state format version 1"))
   }
+
+  test("SPARK-38906 do not drop watermark when joinWith() is called -- CONTROL") {
+    def left = MemoryStream[(Int, Long)]
+    def right = MemoryStream[(Int, Long)]
+
+    def toStream(input: MemoryStreamBase[(Int, Long)], prefix: String) = input
+      .toDS()
+      .select($"_1".alias(s"${prefix}Value"), timestamp_seconds($"_2").alias(s"${prefix}Time"))
+      .withWatermark(s"${prefix}Time", "6 seconds")
+
+    val query = toStream(left, "left").join(
+      toStream(right, "right"),
+      ($"leftValue" === $"rightValue")
+        && $"rightTime".between($"leftTime", expr("leftTime + interval 5 seconds")),
+      joinType = "leftOuter"
+      )
+    testStream(query)(
+      MultiAddData(left, (1, 1L), (2, 3L))(right, (1, 2L))
+      //CheckNewAnswer( Row(1, 1L, 1, 2L) ) //,
+      //assertNumStateRows(3, 3),
+      //AddData(left, (4, 10L)), // force watermark expire
+      //CheckNewAnswer( Row(1, 1L, 1, 2L), Row(2, 3L, null, null) ),
+      //assertNumStateRows(3, 3)
+      )
+  }
+
+  test("SPARK-38906 do not drop watermark when joinWith() is called -- TEST") {
+    def left = MemoryStream[(Int, Long)]
+    def right = MemoryStream[(Int, Long)]
+
+    def toStream(input: MemoryStreamBase[(Int, Long)], prefix: String) = input
+      .toDS()
+      .select($"_1".alias(s"${prefix}Value"), timestamp_seconds($"_2").alias(s"${prefix}Time"))
+      .withWatermark(s"${prefix}Time", "6 seconds")
+
+    val query = toStream(left, "left").joinWith(
+      toStream(right, "right"),
+      ($"leftValue" === $"rightValue")
+        && $"rightTime".between($"leftTime", expr("leftTime + interval 5 seconds")),
+      joinType = "leftOuter"
+      )
+    testStream(query)(
+      MultiAddData(left, (1, 1L), (2, 3L))(right, (1, 2L)),
+      CheckNewAnswer( (1->1L, 1->2L) ),
+      assertNumStateRows(3, 3),
+      AddData(left, (4, 10L)), // force watermark expire
+      CheckNewAnswer( (1->1L, 1->2L), (2->3L, null) ),
+      assertNumStateRows(3, 3)
+      )
+  }
+
 
   test("SPARK-29438: ensure UNION doesn't lead stream-stream join to use shifted partition IDs") {
     def constructUnionDf(desiredPartitionsForInput1: Int)

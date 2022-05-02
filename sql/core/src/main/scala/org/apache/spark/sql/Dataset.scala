@@ -1176,6 +1176,20 @@ class Dataset[T] private[sql](
     implicit val tuple2Encoder: Encoder[(T, U)] =
       ExpressionEncoder.tuple(this.exprEnc, other.exprEnc)
 
+    def formResultExpr(dataset: Dataset[_], plan: LogicalPlan, alias: String) = {
+      val resultExpr = Alias(
+        {
+          if (!dataset.exprEnc.isSerializedAsStructForTopLevel) {
+            assert(plan.output.length == 1)
+            plan.output.head
+          } else CreateStruct(plan.output)
+        }, alias
+      )()
+
+      plan match {
+      }
+    }
+
     val leftResultExpr = {
       if (!this.exprEnc.isSerializedAsStructForTopLevel) {
         assert(joined.left.output.length == 1)
@@ -1198,12 +1212,17 @@ class Dataset[T] private[sql](
       // For inner joins, we can directly perform the join and then can project the join
       // results into structs. This ensures that data remains flat during shuffles /
       // exchanges (unlike the outer join path, which nests the data before shuffling).
+      println("dataset: inner join")
       withTypedPlan(Project(Seq(leftResultExpr, rightResultExpr), joined))
     } else { // outer joins
       // For both join sides, combine all outputs into a single column and alias it with "_1
       // or "_2", to match the schema for the encoder of the join result.
       // Note that we do this before joining them, to enable the join operator to return null
       // for one side, in cases like outer-join.
+      println("dataset: outer join")
+      val leftCols = leftResultExpr :: Nil
+      val rightCols = rightResultExpr :: Nil
+
       val left = Project(leftResultExpr :: Nil, joined.left)
       val right = Project(rightResultExpr :: Nil, joined.right)
 
